@@ -83,13 +83,17 @@ class SimpleMatcher:
         try:
             self.buys.remove(oid)
             self.market_service.log(f"CANCEL -> order {oid}")
+            return
         except ValueError:
             pass
         try:
             self.sells.remove(oid)
             self.market_service.log(f"CANCEL -> order {oid}")
+            return
         except ValueError:
-            self.market_service.log(f"NOCANCEL -> order {oid}")
+            pass
+
+        self.market_service.log(f"NOCANCEL -> order {oid}")
     
     def match(self, order):
         # we fucked this before
@@ -135,27 +139,38 @@ class SimpleExchange:
         self.matcher.try_cancel(oid)
 
 
-# make an exchange
+class SimpleGateway:
+    def __init__(self, exchange):
+        self.__exchange = exchange # this would be a exchange connection object
+
+    def new_order(self, product, side, price):
+        order = Order.from_garbage(product, side, price)
+        self.__exchange.new_order(order)
+        return order # does not necessarily imply order has been accepted
+
+    def cancel_order(self, oid):
+        self.__exchange.cancel_order(oid)
+
+    def amend_order(self, order):
+        self.__exchange.amend_order(order)
+    
+
 market_service = SimpleMarketData()
 exchange = SimpleExchange("STI", market_service)
-o1 = Order.from_garbage("STI", 1, 10)
-o2 = Order.from_garbage("STI", 2, 12)
-o3 = Order.from_garbage("STI", 1, 1)
-exchange.new_order(o1)
-exchange.new_order(o2)
-exchange.new_order(o3)
+gateway = SimpleGateway(exchange)
+gateway.new_order("STI", 1, 10)
+gateway.new_order("STI", 2, 12)
+gateway.new_order("STI", 1, 1)
+gateway.cancel_order(1)
+gateway.cancel_order(2)
 
-exchange.cancel_order(1)
-exchange.cancel_order(2)
-
-o4 = Order.from_garbage("STI", 1, 1)
-exchange.new_order(o4)
-o4 = Order.from_garbage("STI", 1, 2)
-o4.oid = 3
-o5 = Order.from_garbage("STI", 1, 2)
-o5.oid = 10
-exchange.amend_order(o5)
+order = gateway.new_order("STI", 1, 10)
+order.oid = 3
+gateway.amend_order(order)
 
 # gateway should check message is valid and create relevant objects
 # exchange should validate objects for business rules
 # matcher is dumb and just follows all instructions
+
+# this time sam is not hung up on fancy architecture and tom is not hung
+# up on making it perfectly realistic
