@@ -242,23 +242,6 @@ class SimpleGateway:
         self.__exchange.amend_order(order)
     
 
-class SocketGateway:
-    def __init__(self, exchange):
-        self.__exchange = exchange
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM).bind(("127.0.0.1", 8008))
-    
-class SocketGatewayClient:
-
-    def __init__(self) -> None:
-        self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("127.0.0.1", 8008))
-
-    def new_order(self, product, side, price):
-        order = Order.from_garbage(product, side, price)
-        self.__exchange.new_order(order)
-        #client.send(json)
-        return order
-
-
 
 
 
