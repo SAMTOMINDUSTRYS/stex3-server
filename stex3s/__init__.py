@@ -1,3 +1,4 @@
+import socket
 from collections import deque
 from enum import Enum
 
@@ -8,6 +9,26 @@ class Product:
 class OrderSide(Enum):
     BUY = 1
     SELL = 2 # WHAT
+
+class MarketMessage(Enum):
+    NEW_ORDER = 1
+    FILL_ORDER = 2
+    AMEND_ORDER = 3
+    CANCEL_ORDER = 4
+
+class Colors(Enum):
+    PINK = "\033[95m"
+    BLUE ="\033[94m"
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    RESET = "\033[0m"
+
+    def __str__(self):
+        return self.value
+
+    @classmethod
+    def of_color(cls, color, msg):
+        return str(color)+msg+str(cls.RESET)
 
 class Order:
     def __init__(self, product: Product, order_side: OrderSide, price):
@@ -35,16 +56,37 @@ class Order:
 
 # THIS is the truth
 # clients need to connect and make sure they have read all messages in their sequence
+# is this actually needed?
 class SimpleMarketData:
     def __init__(self) -> None:
-        self.price = None
+        self.level_one = None
+        self.level_two = {
+            # we are going to ignore this complexity for now
+        }
 
-    def log(self, s):
-        print(s)
+    # lol do this nicely
+    def l1_update(self, payload):
+        last_payload = self.level_one
+        if last_payload != payload:
+            c = Colors.of_color(Colors.RED, "[L1]")
+            print(c, str(payload))
+        self.level_one = payload
 
-    def update_price(self, trade):
-        self.price = trade["price"]
-        self.log(f"PRICE -> {self.price}")
+    def l2_update(self, event_type, payload):
+        print(Colors.PINK, "[L2]", Colors.RESET, event_type, payload)
+
+        ##if event_type == MarketMessage.FILL_ORDER:
+        #    # changes: last_price, last_size, buy/sell prices/sizes
+        #    self.update_price(payload["last_price"])
+
+    def client_update(self, event_type,  payload):
+        print(Colors.GREEN, "[CL]", Colors.RESET, event_type, payload)
+
+    def update_price(self, price):
+        last_price = self.level_one["last_price"]
+        self.level_one["last_price"] = price
+        if last_price != price:
+            print(Colors.RED, "[L1]", Colors.RESET, "PRICE CHANGE", self.level_one['last_price'])
     
     
 # match earliest buy to earliest sell
@@ -54,12 +96,55 @@ class SimpleMatcher:
         self.buys  = deque([])
         self.sells = deque([])
         self.market_service = market_service
-    
+        self.last_price = None
+        self.last_size = None
+        self.best_buy_price = None
+        self.best_buy_size = None
+        self.best_sell_price = None
+        self.best_sell_size = None
+
+    def update_l1(self):
+        # emit l1
+        try:
+            top_buy = self.buys[0]
+            self.best_buy_price = top_buy.price
+            self.best_buy_size = 1
+        except IndexError:
+            pass
+        try:
+            top_sell = self.sells[0]
+            self.best_sell_price = top_sell.price
+            self.best_sell_size = 1
+        except IndexError:
+            pass
+            
+        payload = {
+            "last_price": self.last_price,
+            "last_size": self.last_size,
+            "buy_price": self.best_buy_price,
+            "buy_size": self.best_buy_size,
+            "sell_price": self.best_sell_price,
+            "sell_size": self.best_sell_size,
+        }
+        self.market_service.l1_update(payload)
+
     # matcher IS responsible for the price
     def emit_fill(self, a, b):
-        price = ((a.price +b.price)/2)
-        self.market_service.log('FILL -> order: {} and order: {} @ {}'.format(a,b, price))
-        self.market_service.update_price({"price": price})
+        # any calculations needing last price use self.price here
+        trade_price = ((a.price +b.price)/2)
+        trade_size = 1
+        self.last_price = trade_price
+        self.last_size = trade_size
+
+
+        # emit l2
+        payload = {
+            "a": str(a), # dont look
+            "b": str(b), # lol
+            "price": self.last_price
+        }
+        self.market_service.l2_update(MarketMessage.FILL_ORDER, payload)
+        self.update_l1()
     
     def try_amend(self, order):
         a = self.buys
@@ -68,32 +153,34 @@ class SimpleMatcher:
         
         found = None
         for (i, book_order) in enumerate(a):
-            print(book_order, order)
             if order == book_order:
                 found = i
                 break
         if found is not None:
             a[found] = order
-            self.market_service.log(f"AMEND -> order {order}")
+            self.market_service.l2_update(MarketMessage.AMEND_ORDER, " -> order {order}")
+            self.update_l1()
         else:
-            self.market_service.log(f"NOAMEND -> order {order.oid}")
+            self.market_service.client_update(MarketMessage.AMEND_ORDER, f"NOAMEND -> order {order.oid}")
                 
 
     def try_cancel(self, oid):
         try:
             self.buys.remove(oid)
-            self.market_service.log(f"CANCEL -> order {oid}")
+            self.market_service.l2_update(MarketMessage.CANCEL_ORDER, f" -> order {oid}")
+            self.update_l1()
             return
         except ValueError:
             pass
         try:
             self.sells.remove(oid)
-            self.market_service.log(f"CANCEL -> order {oid}")
+            self.market_service.l2_update(MarketMessage.CANCEL_ORDER, f" -> order {oid}")
+            self.update_l1()
             return
         except ValueError:
             pass
 
-        self.market_service.log(f"NOCANCEL -> order {oid}")
+        self.market_service.client_update(MarketMessage.CANCEL_ORDER, f"NOCANCEL -> order {oid}")
     
     def match(self, order):
         # we fucked this before
@@ -109,9 +196,10 @@ class SimpleMatcher:
             
         if len(b) > 0:
             self.emit_fill(b.popleft(), order)
-        else:
+        else: # NEW ORDER
             a.append(order)
-            self.market_service.log(f"NEW -> {order}")
+            self.market_service.l2_update(MarketMessage.NEW_ORDER, f"NEW -> {order}")
+            self.update_l1()
 
     
 # lets keep this simple
@@ -133,7 +221,6 @@ class SimpleExchange:
         # any checking should be done here
         # we decided side amend is not allowed
         self.matcher.try_amend(order)
-    
 
     def cancel_order(self, oid):
         self.matcher.try_cancel(oid)
@@ -155,10 +242,31 @@ class SimpleGateway:
         self.__exchange.amend_order(order)
     
 
+class SocketGateway:
+    def __init__(self, exchange):
+        self.__exchange = exchange
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM).bind(("127.0.0.1", 8008))
+    
+class SocketGatewayClient:
+
+    def __init__(self) -> None:
+        self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("127.0.0.1", 8008))
+
+    def new_order(self, product, side, price):
+        order = Order.from_garbage(product, side, price)
+        self.__exchange.new_order(order)
+        #client.send(json)
+        return order
+
+
+
+
+
 market_service = SimpleMarketData()
 exchange = SimpleExchange("STI", market_service)
 gateway = SimpleGateway(exchange)
 gateway.new_order("STI", 1, 10)
+gateway.new_order("STI", 1, 15)
 gateway.new_order("STI", 2, 12)
 gateway.new_order("STI", 1, 1)
 gateway.cancel_order(1)
@@ -168,9 +276,14 @@ order = gateway.new_order("STI", 1, 10)
 order.oid = 3
 gateway.amend_order(order)
 
+#socket_gateway = SocketGateway(exchange)
+
 # gateway should check message is valid and create relevant objects
 # exchange should validate objects for business rules
 # matcher is dumb and just follows all instructions
 
 # this time sam is not hung up on fancy architecture and tom is not hung
 # up on making it perfectly realistic
+# sam was thinking about how complexity killed his original version
+#  we're being better at focusing on keeping things as easy to run
+#  before getting bogged down in complexity
