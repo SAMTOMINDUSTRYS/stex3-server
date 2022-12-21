@@ -63,30 +63,44 @@ class SimpleMarketData:
         self.level_two = {
             # we are going to ignore this complexity for now
         }
+        self.clients = []
+
+    def register_client(self, client):
+        self.clients.append(client)
+
+    def send_message(self, msg):
+        for client in self.clients:
+            client.receive_message(msg)
 
     # lol do this nicely
     def l1_update(self, payload):
         last_payload = self.level_one
         if last_payload != payload:
-            c = Colors.of_color(Colors.RED, "[L1]")
-            print(c, str(payload))
+            msg = Colors.of_color(Colors.RED, "[L1]") + str(payload)
+            print(msg)
+            #self.send_message(f"{c}{str(payload)}")
         self.level_one = payload
 
     def l2_update(self, event_type, payload):
-        print(Colors.PINK, "[L2]", Colors.RESET, event_type, payload)
+        msg = f"{Colors.PINK}[L2]{Colors.RESET} {event_type} {payload}"
+        print(msg)
+        #self.send_message(msg)
 
         ##if event_type == MarketMessage.FILL_ORDER:
         #    # changes: last_price, last_size, buy/sell prices/sizes
         #    self.update_price(payload["last_price"])
 
     def client_update(self, event_type,  payload):
-        print(Colors.GREEN, "[CL]", Colors.RESET, event_type, payload)
+        msg = f"{Colors.GREEN}[CL]{Colors.RESET} {event_type} {payload}"
+        self.send_message(msg)
 
     def update_price(self, price):
         last_price = self.level_one["last_price"]
         self.level_one["last_price"] = price
         if last_price != price:
-            print(Colors.RED, "[L1]", Colors.RESET, "PRICE CHANGE", self.level_one['last_price'])
+            msg = f"{Colors.RED}[L1]{Colors.RESET} PRICE CHANGE = {self.level_one['last_price']}"
+            print(msg)
+            #self.send_message(msg)
     
     
 # match earliest buy to earliest sell
@@ -158,12 +172,11 @@ class SimpleMatcher:
                 break
         if found is not None:
             a[found] = order
-            self.market_service.l2_update(MarketMessage.AMEND_ORDER, " -> order {order}")
+            self.market_service.l2_update(MarketMessage.AMEND_ORDER, f" -> order {order}")
             self.update_l1()
         else:
             self.market_service.client_update(MarketMessage.AMEND_ORDER, f"NOAMEND -> order {order.oid}")
                 
-
     def try_cancel(self, oid):
         try:
             self.buys.remove(oid)
@@ -179,7 +192,6 @@ class SimpleMatcher:
             return
         except ValueError:
             pass
-
         self.market_service.client_update(MarketMessage.CANCEL_ORDER, f"NOCANCEL -> order {oid}")
     
     def match(self, order):
@@ -194,7 +206,7 @@ class SimpleMatcher:
             b = self.buys
             a = self.sells
             
-        if len(b) > 0:
+        if len(b) > 0: # FILL
             self.emit_fill(b.popleft(), order)
         else: # NEW ORDER
             a.append(order)
@@ -227,8 +239,18 @@ class SimpleExchange:
 
 
 class SimpleGateway:
-    def __init__(self, exchange):
+    def __init__(self, exchange, market_service):
         self.__exchange = exchange # this would be a exchange connection object
+        self.market_service = market_service
+        self.market_service.register_client(self)
+
+        # TODO next
+        # consume messages in here to "forward" to correct client
+        # endpoint for requesting L1 data for a particular client
+            # and an option to subscribe to it
+
+    def receive_message(self, msg):
+        print(Colors.BLUE, "GATEWAY", Colors.RESET, msg)
 
     def new_order(self, product, side, price):
         order = Order.from_garbage(product, side, price)
@@ -247,7 +269,7 @@ class SimpleGateway:
 
 market_service = SimpleMarketData()
 exchange = SimpleExchange("STI", market_service)
-gateway = SimpleGateway(exchange)
+gateway = SimpleGateway(exchange, market_service)
 gateway.new_order("STI", 1, 10)
 gateway.new_order("STI", 1, 15)
 gateway.new_order("STI", 2, 12)
