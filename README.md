@@ -8,5 +8,8 @@ the reference implementation for the ~~stex2~~ stex3 server but this time, it wo
 
 
 ## good docs
-- [t7 stuff](https://www.eurex.com/ex-en/support/initiatives/t7-release-10-0)
+- [t7 stuff](https://www.eurex.com/ex-en/support/initiatives/t7-release-11-0)
+    - [t7 market model](https://www.wienerborse.at/uploads/u/cms/files/trading/xetra-t7-market-model-continuous-auction.pdf)
+    - [t7 components and latency](https://www.xetra.com/resource/blob/2419076/1975b3b92d15741d4e72d359dffaa7e5/data/Deutsche-B-rse-s-T7-Insights-into-trading-system-dynamics.pdf)
+    - [t7 "typical trading day" section](https://www.eurex.com/resource/blob/3326202/29b1d39e1df1e09cf3cd3d7bf099bcb1/data/T7_EMDI_MDI_RDI_Manual_v.11.0.3.pdf)
 - [a summary of real stock exchanges](http://www.sse.com.cn/aboutus/research/workstation/c/station20050821.pdf)
