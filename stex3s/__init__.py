@@ -14,7 +14,6 @@ class OrderSide(Enum):
 class MarketMessage(Enum):
     NEW_ORDER = 1
     FILL_ORDER = 2
-    AMEND_ORDER = 3
     CANCEL_ORDER = 4
 
 class Colors(Enum):
@@ -162,27 +161,6 @@ class SimpleMatcher:
         self.market_service.l2_update(MarketMessage.FILL_ORDER, payload)
         self.update_l1()
     
-    def try_amend(self, order):
-        a = self.buys
-        if order.side == OrderSide.SELL:
-            a = self.sells
-        
-        found = None
-        for (i, book_order) in enumerate(a):
-            if order == book_order:
-                found = i
-                break
-        if found is not None:
-            a[found] = order
-            self.market_service.l2_update(MarketMessage.AMEND_ORDER, f" -> order {order}")
-            self.update_l1()
-        else:
-            payload = {
-                "type": "NOAMEND",
-                "order": order.oid,
-            }
-            self.market_service.client_update(MarketMessage.AMEND_ORDER, payload)
-                
     def try_cancel(self, client_id, oid):
         try:
             self.buys.remove(oid)
@@ -241,11 +219,6 @@ class SimpleExchange:
         self.next_id += 1
         self.matcher.match(order)
 
-    def amend_order(self, order):
-        # any checking should be done here
-        # we decided side amend is not allowed
-        self.matcher.try_amend(order)
-
     def cancel_order(self, client_id, oid):
         self.matcher.try_cancel(client_id, oid)
 
@@ -281,9 +254,6 @@ class SimpleGateway:
     def cancel_order(self, client_id, oid):
         self.__exchange.cancel_order(client_id, oid)
 
-    def amend_order(self, order):
-        self.__exchange.amend_order(order)
-    
 
 class SimpleClient:
     def __init__(self):
@@ -307,10 +277,6 @@ gateway.new_order("STI", 2, 12, CLIENT_ID)
 gateway.new_order("STI", 1, 1, CLIENT_ID)
 gateway.cancel_order(CLIENT_ID, 1)
 gateway.cancel_order(CLIENT_ID, 2)
-
-order = gateway.new_order("STI", 1, 10, CLIENT_ID)
-order.oid = 3
-gateway.amend_order(order)
 
 #socket_gateway = SocketGateway(exchange)
 
