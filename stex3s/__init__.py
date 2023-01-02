@@ -1,4 +1,5 @@
 import socket
+import uuid
 from collections import deque
 from enum import Enum
 
@@ -31,16 +32,17 @@ class Colors(Enum):
         return str(color)+msg+str(cls.RESET)
 
 class Order:
-    def __init__(self, product: Product, order_side: OrderSide, price):
+    def __init__(self, product: Product, order_side: OrderSide, price, client_id):
         self.product = product
         self.side = order_side
         self.oid = 0
         self.price = price
+        self.client_id = client_id
         # keep this REALLY simple and forget about qty and price for now
 
     @staticmethod
-    def from_garbage(symbol, side, price):
-        return Order(Product(symbol), OrderSide(side), price)
+    def from_garbage(symbol, side, price, client_id):
+        return Order(Product(symbol), OrderSide(side), price, client_id)
 
     def __str__(self):
         return f"Order {self.oid} PROD={self.product.symbol} SIDE={self.side}"
@@ -92,7 +94,7 @@ class SimpleMarketData:
 
     def client_update(self, event_type,  payload):
         msg = f"{Colors.GREEN}[CL]{Colors.RESET} {event_type} {payload}"
-        self.send_message(msg)
+        self.send_message(payload)
 
     def update_price(self, price):
         last_price = self.level_one["last_price"]
@@ -175,9 +177,13 @@ class SimpleMatcher:
             self.market_service.l2_update(MarketMessage.AMEND_ORDER, f" -> order {order}")
             self.update_l1()
         else:
-            self.market_service.client_update(MarketMessage.AMEND_ORDER, f"NOAMEND -> order {order.oid}")
+            payload = {
+                "type": "NOAMEND",
+                "order": order.oid,
+            }
+            self.market_service.client_update(MarketMessage.AMEND_ORDER, payload)
                 
-    def try_cancel(self, oid):
+    def try_cancel(self, client_id, oid):
         try:
             self.buys.remove(oid)
             self.market_service.l2_update(MarketMessage.CANCEL_ORDER, f" -> order {oid}")
@@ -192,7 +198,13 @@ class SimpleMatcher:
             return
         except ValueError:
             pass
-        self.market_service.client_update(MarketMessage.CANCEL_ORDER, f"NOCANCEL -> order {oid}")
+
+        payload = {
+            "type": "NOCANCEL",
+            "client_id": client_id,
+            "order": oid,
+        }
+        self.market_service.client_update(MarketMessage.CANCEL_ORDER, payload)
     
     def match(self, order):
         # we fucked this before
@@ -234,50 +246,69 @@ class SimpleExchange:
         # we decided side amend is not allowed
         self.matcher.try_amend(order)
 
-    def cancel_order(self, oid):
-        self.matcher.try_cancel(oid)
+    def cancel_order(self, client_id, oid):
+        self.matcher.try_cancel(client_id, oid)
 
 
 class SimpleGateway:
-    def __init__(self, exchange, market_service):
+    def __init__(self, number, exchange, market_service):
+        self.number = number
         self.__exchange = exchange # this would be a exchange connection object
         self.market_service = market_service
         self.market_service.register_client(self)
+        self.connections = {}
 
         # TODO next
         # consume messages in here to "forward" to correct client
         # endpoint for requesting L1 data for a particular client
             # and an option to subscribe to it
 
-    def receive_message(self, msg):
-        print(Colors.BLUE, "GATEWAY", Colors.RESET, msg)
+    def register_client(self, client):
+        self.connections[client.client_id] = client
 
-    def new_order(self, product, side, price):
-        order = Order.from_garbage(product, side, price)
+    def receive_message(self, msg):
+        if msg.get("client_id") in self.connections:
+            self.connections[msg["client_id"]].receive_message(msg)
+        else:
+            print(Colors.BLUE, f"GATEWAY {self.number} DISCARD", Colors.RESET, msg)
+
+
+    def new_order(self, product, side, price, client_id):
+        order = Order.from_garbage(product, side, price, client_id)
         self.__exchange.new_order(order)
         return order # does not necessarily imply order has been accepted
 
-    def cancel_order(self, oid):
-        self.__exchange.cancel_order(oid)
+    def cancel_order(self, client_id, oid):
+        self.__exchange.cancel_order(client_id, oid)
 
     def amend_order(self, order):
         self.__exchange.amend_order(order)
     
 
+class SimpleClient:
+    def __init__(self):
+        self.client_id = uuid.uuid4()
 
+    def receive_message(self, msg):
+        print(Colors.BLUE, f"CLIENT {self.client_id}", Colors.RESET, msg)
 
 
 market_service = SimpleMarketData()
 exchange = SimpleExchange("STI", market_service)
-gateway = SimpleGateway(exchange, market_service)
-gateway.new_order("STI", 1, 10)
-gateway.new_order("STI", 1, 15)
-gateway.new_order("STI", 2, 12)
-gateway.new_order("STI", 1, 1)
-gateway.cancel_order(1)
-gateway.cancel_order(2)
+gateway = SimpleGateway(1, exchange, market_service)
 
-order = gateway.new_order("STI", 1, 10)
+client = SimpleClient()
+gateway.register_client(client)
+
+CLIENT_ID = client.client_id
+gateway.new_order("STI", 1, 10, CLIENT_ID)
+gateway.new_order("STI", 1, 15, CLIENT_ID)
+gateway.new_order("STI", 2, 12, CLIENT_ID)
+gateway.new_order("STI", 1, 1, CLIENT_ID)
+gateway.cancel_order(CLIENT_ID, 1)
+gateway.cancel_order(CLIENT_ID, 2)
+
+order = gateway.new_order("STI", 1, 10, CLIENT_ID)
 order.oid = 3
 gateway.amend_order(order)
 
