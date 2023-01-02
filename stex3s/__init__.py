@@ -1,7 +1,27 @@
 import socket
 import uuid
+import time
 from collections import deque
 from enum import Enum
+
+class ExecutionReport:
+    @staticmethod
+    def for_book():
+        return {
+            "status": "open"
+        }
+
+    @staticmethod
+    def for_fill():
+        return {
+            "status": "filled"
+        }
+
+    @staticmethod
+    def for_cancel():
+        return {
+            "status": "cancelled"
+        }
 
 class Product:
     def __init__(self, symbol) -> None:
@@ -31,17 +51,18 @@ class Colors(Enum):
         return str(color)+msg+str(cls.RESET)
 
 class Order:
-    def __init__(self, product: Product, order_side: OrderSide, price, client_id):
+    def __init__(self, product: Product, order_side: OrderSide, price, client_id, timestamp):
         self.product = product
         self.side = order_side
         self.oid = 0
         self.price = price
         self.client_id = client_id
+        self.receive_ts = timestamp
         # keep this REALLY simple and forget about qty and price for now
 
     @staticmethod
     def from_garbage(symbol, side, price, client_id):
-        return Order(Product(symbol), OrderSide(side), price, client_id)
+        return Order(Product(symbol), OrderSide(side), price, client_id, time.time_ns())
 
     def __str__(self):
         return f"Order {self.oid} PROD={self.product.symbol} SIDE={self.side}"
@@ -84,7 +105,11 @@ class SimpleMarketData:
 
     def l2_update(self, event_type, payload):
         msg = f"{Colors.PINK}[L2]{Colors.RESET} {event_type} {payload}"
-        print(msg)
+        if event_type == MarketMessage.NEW_ORDER:
+            self.client_update(event_type, payload)
+        #print(msg)
+        payload["client_id"] = "*"
+        self.send_message(payload)
         #self.send_message(msg)
 
         ##if event_type == MarketMessage.FILL_ORDER:
@@ -92,7 +117,7 @@ class SimpleMarketData:
         #    self.update_price(payload["last_price"])
 
     def client_update(self, event_type,  payload):
-        msg = f"{Colors.GREEN}[CL]{Colors.RESET} {event_type} {payload}"
+        #msg = f"{Colors.GREEN}[CL]{Colors.RESET} {event_type} {payload}"
         self.send_message(payload)
 
     def update_price(self, price):
@@ -164,14 +189,14 @@ class SimpleMatcher:
     def try_cancel(self, client_id, oid):
         try:
             self.buys.remove(oid)
-            self.market_service.l2_update(MarketMessage.CANCEL_ORDER, f" -> order {oid}")
+            self.market_service.l2_update(MarketMessage.CANCEL_ORDER, {"client_id": client_id, "oid": oid})
             self.update_l1()
             return
         except ValueError:
             pass
         try:
             self.sells.remove(oid)
-            self.market_service.l2_update(MarketMessage.CANCEL_ORDER, f" -> order {oid}")
+            self.market_service.l2_update(MarketMessage.CANCEL_ORDER, {"client_id": client_id, "oid": oid})
             self.update_l1()
             return
         except ValueError:
@@ -200,7 +225,11 @@ class SimpleMatcher:
             self.emit_fill(b.popleft(), order)
         else: # NEW ORDER
             a.append(order)
-            self.market_service.l2_update(MarketMessage.NEW_ORDER, f"NEW -> {order}")
+            payload = {
+                "client_id": order.client_id,
+                "order": order,
+            }
+            self.market_service.l2_update(MarketMessage.NEW_ORDER, payload) # lol
             self.update_l1()
 
     
@@ -242,6 +271,9 @@ class SimpleGateway:
     def receive_message(self, msg):
         if msg.get("client_id") in self.connections:
             self.connections[msg["client_id"]].receive_message(msg)
+        elif msg.get("client_id") == "*":
+            for _, connection in self.connections.items():
+                connection.receive_message(msg)
         else:
             print(Colors.BLUE, f"GATEWAY {self.number} DISCARD", Colors.RESET, msg)
 
@@ -269,6 +301,9 @@ gateway = SimpleGateway(1, exchange, market_service)
 
 client = SimpleClient()
 gateway.register_client(client)
+
+client2 = SimpleClient()
+gateway.register_client(client2)
 
 CLIENT_ID = client.client_id
 gateway.new_order("STI", 1, 10, CLIENT_ID)
